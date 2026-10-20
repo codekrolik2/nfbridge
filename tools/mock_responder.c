@@ -181,13 +181,16 @@ int main(int argc, char **argv)
                 return 2;
             }
             break;
-        case 'd':
-            delay_ms = strtol(optarg, NULL, 10);
-            if (delay_ms < 0 || delay_ms > 600000) {
+        case 'd': {
+            char *end;
+            errno = 0;
+            delay_ms = strtol(optarg, &end, 10);
+            if (errno != 0 || end == optarg || *end != '\0' || delay_ms < 0 || delay_ms > 600000) {
                 usage(argv[0]);
                 return 2;
             }
             break;
+        }
         case 'h':
             usage(argv[0]);
             return 0;

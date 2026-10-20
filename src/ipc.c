@@ -268,7 +268,8 @@ int nfb_ipc_decide(struct nfb_ipc *ipc, const struct nfb_request_hdr *hdr, const
         uint8_t rbuf[NFB_RESP_LEN];
         rc = recv_all(ipc->fd, rbuf, sizeof(rbuf), &deadline);
         if (rc != IO_OK) {
-            drop_connection(ipc, "receive failed: %s", io_strerror(rc, errno));
+            int err = errno;
+            drop_connection(ipc, "receive failed: %s", io_strerror(rc, err));
             return -1;
         }
 
