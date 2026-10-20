@@ -81,21 +81,117 @@ The Java process is the **server**: it creates and listens on the Unix socket; `
 connects to it. `nfbridge` may be started before Java – it keeps retrying (exponential
 backoff 100 ms → 5 s) and applies the fail policy verdict meanwhile.
 
-### Routing traffic to the queue
+### Routing traffic to the queue (kill switch, recommended)
+
+The intended deployment is a **kill switch**: a packet passes only if the whole approval
+chain (kernel → `nfbridge` → Java) explicitly approves it. If any link is missing or
+broken, the packet is not approved and is **dropped**:
+
+| Failure                                                        | Result  | Enforced by                                 |
+|----------------------------------------------------------------|---------|---------------------------------------------|
+| `nfbridge` not running / crashed / not bound to the queue      | DROP    | kernel – queue rule has **no** `bypass`     |
+| Java not running, socket missing, connection lost              | DROP    | `nfbridge` fail-closed default              |
+| Java too slow (`--timeout-ms` exceeded) or malformed reply     | DROP    | `nfbridge` fail-closed default              |
+| Kernel queue full (packets arrive faster than verdicts)        | DROP    | kernel – `--fail-open` not set              |
+| Java answers `DROP`                                            | DROP    | Java policy                                 |
+| Java answers `ALLOW`                                           | ACCEPT  | – the only path to ACCEPT                   |
+
+Requirements for this to hold:
+
+- The queue rule must **not** use `--queue-bypass` (iptables) / `bypass` (nftables).
+- `nfbridge` must run **without** `--fail-open`.
+- Nothing is exempted from approval – not loopback, not the Java process. An accepted
+  loopback path would let a compromised process drive another local process (proxy, agent,
+  daemon) whose outbound traffic Java does approve, laundering its traffic through it.
+  Loopback packets traverse both OUTPUT and INPUT, so Java sees them twice; local services
+  that use loopback (e.g. a DNS stub resolver on `127.0.0.53`) stop working whenever the
+  chain is down, by design.
+- The examples below include loopback and SSH (port 22) exemptions **commented out**. Both
+  are unapproved paths; uncomment them only if you knowingly accept that (e.g. SSH as a
+  temporary lockout safety net during setup).
+- No exemption is needed for the `nfbridge` ↔ Java link: it is a Unix domain socket,
+  which never passes through netfilter. The Java decision process should not need network
+  access of its own; if it does, that traffic is queued like any other and – because
+  verdicts are synchronous – would stall waiting on itself, so design the decision
+  process to work without it.
+
+**Lockout warning:** with these rules active and `nfbridge`/Java not running, all queued
+traffic is dropped – that is the point. Keep console access while testing.
+
+iptables:
+
+```sh
+# Everything goes to the queue. The commented-out exemptions are unapproved paths –
+# uncomment only if you accept that risk.
+# sudo iptables -A INPUT  -i lo -j ACCEPT
+# sudo iptables -A INPUT  -p tcp --dport 22 -j ACCEPT
+sudo iptables -A INPUT  -j NFQUEUE --queue-num 0
+# sudo iptables -A OUTPUT -o lo -j ACCEPT
+# sudo iptables -A OUTPUT -p tcp --sport 22 -j ACCEPT
+sudo iptables -A OUTPUT -j NFQUEUE --queue-num 0
+sudo iptables -A FORWARD -j NFQUEUE --queue-num 0
+
+# Repeat with ip6tables for IPv6 (or drop IPv6 entirely), otherwise IPv6 bypasses the switch
+```
+
+nftables:
+
+```sh
+sudo nft add table inet nfbridge
+sudo nft add chain inet nfbridge in  '{ type filter hook input   priority 0; policy drop; }'
+sudo nft add chain inet nfbridge out '{ type filter hook output  priority 0; policy drop; }'
+sudo nft add chain inet nfbridge fwd '{ type filter hook forward priority 0; policy drop; }'
+# Commented-out exemptions are unapproved paths – uncomment only if you accept that risk.
+# sudo nft add rule inet nfbridge in  iif lo accept
+# sudo nft add rule inet nfbridge in  tcp dport 22 accept
+sudo nft add rule inet nfbridge in  queue num 0
+# sudo nft add rule inet nfbridge out oif lo accept
+# sudo nft add rule inet nfbridge out tcp sport 22 accept
+sudo nft add rule inet nfbridge out queue num 0
+sudo nft add rule inet nfbridge fwd queue num 0
+# Remove everything again (this switches the kill switch off)
+sudo nft delete table inet nfbridge
+```
+
+The `inet` table covers IPv4 and IPv6. `policy drop` on the chains is a second safety net:
+a packet that somehow does not reach the queue rule is still dropped rather than accepted.
+
+Run `nfbridge` without `--fail-open`:
+
+```sh
+sudo ./build/nfbridge --queue 0 --socket /run/nfbridge/nfbridge.sock --timeout-ms 500
+```
+
+Quick verification of the kill switch (from a non-excluded path, e.g. `ping 1.1.1.1`):
+
+1. rules active, `nfbridge` stopped → traffic blocked (kernel drops, no listener);
+2. `nfbridge` running, Java stopped → traffic blocked (fail-closed verdict);
+3. `nfbridge` and Java running, Java answers ALLOW → traffic passes.
+
+### Alternative: fail-open / bypass setup (not a kill switch)
+
+If availability matters more than enforcement, the chain can be configured to let traffic
+through when it is broken. **This is not a kill switch** – with `nfbridge` or Java down,
+traffic flows unfiltered.
+
+- `--queue-bypass` / `bypass` on the rule: the kernel ACCEPTs packets while no `nfbridge`
+  is bound to the queue.
+- `nfbridge --fail-open`: ACCEPT when Java is unavailable/slow/misbehaving, and on kernel
+  queue overflow.
 
 iptables (start narrow – a catch-all rule with a broken consumer cuts off the host,
 including your SSH session):
 
 ```sh
 # Only ICMP to/from this host
-sudo iptables -I INPUT  -p icmp -j NFQUEUE --queue-num 0
-sudo iptables -I OUTPUT -p icmp -j NFQUEUE --queue-num 0
+sudo iptables -I INPUT  -p icmp -j NFQUEUE --queue-num 0 --queue-bypass
+sudo iptables -I OUTPUT -p icmp -j NFQUEUE --queue-num 0 --queue-bypass
 
-# Forwarded traffic; --queue-bypass ACCEPTs packets while no nfbridge is bound to the queue
+# Forwarded traffic
 sudo iptables -I FORWARD -j NFQUEUE --queue-num 0 --queue-bypass
 
 # IPv6 equivalent
-sudo ip6tables -I OUTPUT -p ipv6-icmp -j NFQUEUE --queue-num 0
+sudo ip6tables -I OUTPUT -p ipv6-icmp -j NFQUEUE --queue-num 0 --queue-bypass
 ```
 
 nftables:
@@ -115,9 +211,14 @@ sudo nft add rule inet nfbridge out queue num 0 bypass
 sudo nft delete table inet nfbridge
 ```
 
-If the Java process itself talks over the network, make sure its own traffic (or the
-socket's) cannot deadlock waiting on its own verdicts (e.g. exclude it by uid with
-`meta skuid` / `-m owner --uid-owner`, or by mark).
+```sh
+sudo ./build/nfbridge --queue 0 --socket /run/nfbridge/nfbridge.sock --fail-open
+```
+
+If the Java process itself talks over the network, its traffic can stall waiting on its own
+verdicts. In this fail-open setup it may be excluded by uid (`meta skuid` /
+`-m owner --uid-owner`) or by mark; in the kill-switch setup such an exemption would be an
+unapproved path and is not used.
 
 ### Manual testing with the mock responder
 
@@ -220,15 +321,18 @@ while (true) {
 - **Socket trust.** Whoever listens on the socket path decides the fate of every queued
   packet and receives full packet contents. Put the socket in a directory only the Java
   service user can write (e.g. `/run/nfbridge`, mode `0750`), and restrict who can connect.
-- **Fail-closed vs fail-open.** Default is fail-closed: while Java is down, slow (past
-  `--timeout-ms`) or returns malformed replies, packets are **dropped** – safe for
-  enforcement, but a Java outage becomes a network outage for queued traffic. `--fail-open`
-  **accepts** instead (availability over enforcement) and also sets the kernel
-  `NFQA_CFG_F_FAIL_OPEN` flag so packets are accepted rather than dropped when the kernel
-  queue overflows. Independently, the rule's `--queue-bypass` / `bypass` decides what
-  happens when **no** `nfbridge` is bound to the queue (without it, packets are dropped).
-- **Lockout.** Test rules on a narrow match first and exclude your management (SSH) traffic,
-  and the Java process's own traffic, from the queue.
+- **Fail-closed vs fail-open.** The recommended setup is the
+  [kill switch](#routing-traffic-to-the-queue-kill-switch-recommended): if any part of the
+  approval chain is down, slow or misbehaving, packets are not approved and are
+  **dropped** – a Java or `nfbridge` outage becomes a network outage for queued traffic, by
+  design. Two independent settings control this: the rule's `--queue-bypass` / `bypass`
+  (what the kernel does when **no** `nfbridge` is bound – without it, drop) and
+  `nfbridge --fail-open` (what `nfbridge` does when Java is unavailable, and whether the
+  kernel accepts on queue overflow via `NFQA_CFG_F_FAIL_OPEN` – without it, drop). Using
+  either one gives up the kill-switch guarantee.
+- **Lockout.** Test rules on a narrow match first and keep console access or an excluded
+  management (SSH) session while doing so. In the kill-switch setup every other exemption
+  is an unapproved path – do not add one.
 - **Throughput.** This version is intentionally synchronous: one packet in flight at a time,
   so throughput is bounded by the Java round-trip latency. A stuck Java process stalls the
   queue for up to `--timeout-ms` per packet. Packets are copied up to 65535 bytes.
