@@ -146,8 +146,27 @@ sudo iptables -A INPUT  -j NFQUEUE --queue-num 0
 # sudo iptables -A OUTPUT -p tcp --sport 22 -j ACCEPT
 sudo iptables -A OUTPUT -j NFQUEUE --queue-num 0
 sudo iptables -A FORWARD -j NFQUEUE --queue-num 0
+```
 
-# Repeat with ip6tables for IPv6 (or drop IPv6 entirely), otherwise IPv6 bypasses the switch
+`iptables` only covers IPv4. Without equivalent IPv6 rules, IPv6 traffic bypasses the kill
+switch entirely. Either queue IPv6 as well:
+
+```sh
+# sudo ip6tables -A INPUT  -i lo -j ACCEPT
+# sudo ip6tables -A INPUT  -p tcp --dport 22 -j ACCEPT
+sudo ip6tables -A INPUT  -j NFQUEUE --queue-num 0
+# sudo ip6tables -A OUTPUT -o lo -j ACCEPT
+# sudo ip6tables -A OUTPUT -p tcp --sport 22 -j ACCEPT
+sudo ip6tables -A OUTPUT -j NFQUEUE --queue-num 0
+sudo ip6tables -A FORWARD -j NFQUEUE --queue-num 0
+```
+
+or drop IPv6 outright if you do not need it:
+
+```sh
+sudo ip6tables -P INPUT   DROP
+sudo ip6tables -P OUTPUT  DROP
+sudo ip6tables -P FORWARD DROP
 ```
 
 nftables:
