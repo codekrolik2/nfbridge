@@ -65,7 +65,7 @@ pre-releases). It builds with `-DNFBRIDGE_WERROR=ON`, runs the tests on Ubuntu 2
 LICENSE) and `SHA256SUMS`:
 
 ```sh
-git tag v0.1.0 && git push origin v0.1.0
+git tag v{VERSION} && git push origin v{VERSION}
 ```
 
 The binaries link dynamically against `libnetfilter_queue`; install it on the target

@@ -1,8 +1,8 @@
 name: Release
 
 # Push a tag matching the CMake project version to publish a release:
-#   git tag v0.1.0 && git push origin v0.1.0
-# Tags with a suffix (e.g. v0.2.0-rc1) are published as pre-releases.
+#   git tag v{VERSION} && git push origin v{VERSION}
+# Tags with a suffix (e.g. v{VERSION}-rc1) are published as pre-releases.
 on:
   push:
     tags: ['v*']
