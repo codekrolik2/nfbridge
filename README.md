@@ -55,6 +55,22 @@ sudo cmake --install build                   # installs /usr/local/sbin/nfbridge
 CMake options: `-DNFBRIDGE_WERROR=ON` (warnings as errors), `-DNFBRIDGE_BUILD_TOOLS=OFF`
 (skip the mock responder), `-DBUILD_TESTING=OFF` (skip tests).
 
+### Releases
+
+`.github/workflows/release.yml` runs when a `v*` tag is pushed. The tag must match the
+`VERSION` in `CMakeLists.txt` (tags with a suffix such as `v0.2.0-rc1` become
+pre-releases). It builds with `-DNFBRIDGE_WERROR=ON`, runs the tests on Ubuntu 22.04
+(x86_64 and aarch64) and publishes a GitHub release with
+`nfbridge-<tag>-linux-<arch>.tar.gz` (`nfbridge`, `nfbridge-mock-responder`, README,
+LICENSE) and `SHA256SUMS`:
+
+```sh
+git tag v0.1.0 && git push origin v0.1.0
+```
+
+The binaries link dynamically against `libnetfilter_queue`; install it on the target
+(`sudo apt-get install libnetfilter-queue1` / `sudo dnf install libnetfilter_queue`).
+
 ## Run
 
 ```
