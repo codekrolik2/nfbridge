@@ -30,6 +30,7 @@ src/ipc.c           Unix socket client: framing, timeouts, reconnect/backoff
 src/protocol.c      binary wire format encode/decode/validation
 src/log.c           leveled logging to stderr
 tools/mock_responder.c  stand-in for the Java side, for manual testing
+java/               standalone Gradle project for the dummy Java IPC decision server (accepts all traffic)
 tests/              unit tests (protocol) and IPC tests against fake servers
 ```
 
@@ -54,6 +55,36 @@ sudo cmake --install build                   # installs /usr/local/sbin/nfbridge
 
 CMake options: `-DNFBRIDGE_WERROR=ON` (warnings as errors), `-DNFBRIDGE_BUILD_TOOLS=OFF`
 (skip the mock responder), `-DBUILD_TESTING=OFF` (skip tests).
+
+### Dummy Java decision server (CLI and IDE)
+
+The `java/` directory is a standalone Gradle application requiring JDK 17 and
+Unix-domain socket support (Linux is recommended). The Gradle wrapper downloads
+Gradle on its first use; no system Gradle installation is needed.
+
+```sh
+cd java
+./gradlew build
+./gradlew run --args='/tmp/nfbridge.sock'
+```
+
+In IntelliJ IDEA, open `java/` as a project, or link `java/build.gradle` as a Gradle
+project in the existing workspace. Select JDK 17 for the project and Gradle JVM,
+then run or debug the `main` method in `src/main/java/JavaServerLoop.java`.
+Set **Program arguments** to `/tmp/nfbridge.sock` in its run configuration to
+avoid needing write access to `/run/nfbridge`. Alternatively, run the Gradle
+`run` task with `--args='/tmp/nfbridge.sock'`.
+
+Start the C bridge with the same socket path, for example from the repository root:
+
+```sh
+sudo ./build/nfbridge --socket /tmp/nfbridge.sock
+```
+
+Without an argument, the Java server uses `/run/nfbridge/nfbridge.sock`; that
+directory must already exist and be writable by the Java process. The sample
+`decide` policy currently allows every packet. Use `/tmp` only for local testing;
+for deployment, use the protected socket directory described below.
 
 ### Releases
 
