@@ -215,6 +215,9 @@ sudo nft add rule inet nfbridge in  queue num 0
 # sudo nft add rule inet nfbridge out tcp sport 22 accept
 sudo nft add rule inet nfbridge out queue num 0
 sudo nft add rule inet nfbridge fwd queue num 0
+```
+
+```
 # Remove everything again (this switches the kill switch off)
 sudo nft delete table inet nfbridge
 ```
