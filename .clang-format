@@ -1,0 +1,11 @@
+# Formatting for nfbridge C sources. Run: clang-format -i src/*.c include/nfbridge/*.h tools/*.c tests/*.c
+BasedOnStyle: LLVM
+IndentWidth: 4
+ColumnLimit: 100
+BreakBeforeBraces: Linux
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+IndentCaseLabels: false
+PointerAlignment: Right
+SortIncludes: false
